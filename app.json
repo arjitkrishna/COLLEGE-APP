@@ -1,0 +1,42 @@
+{
+  "expo": {
+    "name": "IIIT NR Workspace",
+    "slug": "iiit-nr-workspace",
+    "scheme": "iiitnr",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1A1A2E"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "edu.iiitnr.workspace",
+      "userInterfaceStyle": "dark"
+    },
+    "android": {
+      "package": "edu.iiitnr.workspace",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1A1A2E"
+      },
+      "userInterfaceStyle": "dark"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-asset",
+      "expo-font",
+      "expo-secure-store"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "c0912055-3adb-4b62-9148-d20fb22c0fac"
+      }
+    }
+  }
+}
