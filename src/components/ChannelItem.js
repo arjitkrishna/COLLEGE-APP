@@ -20,7 +20,7 @@ const ChannelItem = ({ channel = {}, onPress, isActive = false }) => {
     >
       <View style={styles.iconContainer}>
         <MaterialCommunityIcons
-          name={isVoice ? 'volume-high' : 'pound'}
+          name={isVoice ? 'volume-high' : channel.icon || 'pound'}
           size={20}
           color={isActive ? colors.white : colors.textMuted}
         />

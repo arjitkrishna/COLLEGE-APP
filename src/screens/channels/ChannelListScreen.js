@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import {
   StyleSheet,
   Text,
@@ -8,21 +8,65 @@ import {
   TouchableOpacity,
   Alert,
   StatusBar,
+  ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { fetchChannels, fetchConversations } from '../../lib/chat';
+import { useAuth } from '../../auth/AuthContext';
+import useProfile from '../../hooks/useProfile';
 import { useApp } from '../../context/AppContext';
-import { GENERAL_CHANNELS, BRANCH_CHANNELS } from '../../data/channelsData';
 import ChannelItem from '../../components/ChannelItem';
 import colors from '../../theme/colors';
 
-const ChannelListScreen = ({ navigation }) => {
-  const { user, currentBranch } = useApp();
-  const branch = user?.branch || currentBranch || 'CSE';
-  const branchColor = colors.branches[branch] || colors.primary;
+const BRANCHES = ['CSE', 'DSAI', 'ECE'];
 
+const ChannelListScreen = ({ navigation }) => {
+  const { user } = useAuth();
+  const { setBranch } = useApp();
+  const { profile, loading: profileLoading, updateBranch, refresh } = useProfile();
+  const branch = profile?.branch;
+  const branchColor = colors.branches[branch] || colors.primary;
+  const isAdmin = profile?.role === 'admin';
+  const canManage = isAdmin || Boolean(profile?.can_create_channels);
+
+  const [channels, setChannels] = useState([]);
+  const [conversations, setConversations] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [collapsedCategories, setCollapsedCategories] = useState({});
+
+  const load = useCallback(
+    async (isRefresh = false) => {
+      if (isRefresh) setRefreshing(true);
+      try {
+        setLoadError(null);
+        const [chs, convs] = await Promise.all([
+          fetchChannels(),
+          fetchConversations(user?.id),
+        ]);
+        setChannels(chs);
+        setConversations(convs);
+      } catch (e) {
+        setLoadError(e.message);
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [user?.id]
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      refresh();
+      load();
+    }, [load, refresh])
+  );
 
   const toggleCategory = (categoryTitle) => {
     setCollapsedCategories((prev) => ({
@@ -31,119 +75,135 @@ const ChannelListScreen = ({ navigation }) => {
     }));
   };
 
-  // Organize channels into GENERAL, ACADEMICS, and BRANCH
+  const pickBranch = async (b) => {
+    try {
+      await updateBranch(b);
+      setBranch(b);
+      await load();
+    } catch (e) {
+      Alert.alert('Could not save your branch', e.message);
+    }
+  };
+
   const sections = useMemo(() => {
-    const branchChannels = BRANCH_CHANNELS[branch] || BRANCH_CHANNELS.CSE || [];
-    const generalList = GENERAL_CHANNELS || [];
-
-    // Filter by academic keywords vs branch hub
-    const academicList = branchChannels.filter(
-      (ch) =>
-        ch.name.includes('academic') ||
-        ch.name.includes('assignment') ||
-        ch.name.includes('resource') ||
-        ch.description?.toLowerCase().includes('syllabus') ||
-        ch.description?.toLowerCase().includes('notes')
-    );
-
-    const remainingBranchList = branchChannels.filter(
-      (ch) => !academicList.some((ac) => ac.id === ch.id)
-    );
-
+    const visible = channels.filter((c) => !c.branch || c.branch === branch);
     const query = searchQuery.trim().toLowerCase();
 
-    const filterChannels = (list) => {
-      if (!query) return list;
-      return list.filter(
-        (ch) =>
-          ch.name.toLowerCase().includes(query) ||
-          ch.description?.toLowerCase().includes(query) ||
-          (typeof ch.lastMessage === 'string' &&
-            ch.lastMessage.toLowerCase().includes(query)) ||
-          (ch.lastMessage?.text &&
-            ch.lastMessage.text.toLowerCase().includes(query))
-      );
-    };
+    const filterList = (list) =>
+      !query
+        ? list
+        : list.filter(
+            (ch) =>
+              ch.name.toLowerCase().includes(query) ||
+              ch.description?.toLowerCase().includes(query)
+          );
 
-    const generalFiltered = filterChannels(generalList);
-    const academicFiltered = filterChannels(academicList);
-    const branchFiltered = filterChannels(remainingBranchList);
+    const dmItems = conversations.map((c) => ({
+      id: `dm-${c.id}`,
+      name: c.otherUser.name,
+      description: 'Direct message',
+      icon: 'account-circle-outline',
+      isDm: true,
+      conversation: c,
+    }));
 
-    const rawSections = [
-      {
-        id: 'GENERAL',
-        title: 'GENERAL',
-        data: generalFiltered,
-        count: generalFiltered.length,
-      },
-      {
-        id: 'ACADEMICS',
-        title: 'ACADEMICS',
-        data: academicFiltered,
-        count: academicFiltered.length,
-      },
-      {
-        id: 'BRANCH',
-        title: `${branch} DISCUSSIONS`,
-        data: branchFiltered,
-        count: branchFiltered.length,
-      },
+    const raw = [
+      { title: 'DIRECT MESSAGES', data: filterList(dmItems) },
+      { title: 'GENERAL', data: filterList(visible.filter((c) => c.category === 'GENERAL')) },
+      { title: 'ACADEMICS', data: filterList(visible.filter((c) => c.category === 'ACADEMICS')) },
+      { title: `${branch} DISCUSSIONS`, data: filterList(visible.filter((c) => c.category === 'BRANCH')) },
     ];
 
-    // Handle collapsible behavior: if category is collapsed, pass empty data array
-    return rawSections.map((sec) => ({
-      ...sec,
-      isCollapsed: Boolean(collapsedCategories[sec.title]),
-      data: collapsedCategories[sec.title] ? [] : sec.data,
-      totalCount: sec.count,
-    }));
-  }, [branch, searchQuery, collapsedCategories]);
+    return raw
+      .map((sec) => ({
+        ...sec,
+        id: sec.title,
+        totalCount: sec.data.length,
+        isCollapsed: Boolean(collapsedCategories[sec.title]),
+        data: collapsedCategories[sec.title] ? [] : sec.data,
+      }))
+      .filter((sec) => sec.totalCount > 0);
+  }, [channels, conversations, branch, searchQuery, collapsedCategories]);
 
   const handleCreateChannel = () => {
-    Alert.alert(
-      'Create Channel',
-      'Channel creation is coming soon! Only administrators and student council members can create new channels.',
-      [{ text: 'Got it' }]
-    );
+    if (canManage) {
+      navigation.navigate('CreateChannel');
+    } else {
+      Alert.alert(
+        'Create Channel',
+        'Only admins and students they allow can create channels. Ask an admin if you need this.',
+        [{ text: 'Got it' }]
+      );
+    }
   };
 
-  const handleChannelPress = (channel) => {
-    navigation.navigate('Chat', { channel });
+  const handleItemPress = (item) => {
+    if (item.isDm) {
+      navigation.navigate('Chat', {
+        dm: {
+          conversationId: item.conversation.id,
+          otherUser: item.conversation.otherUser,
+        },
+      });
+    } else {
+      navigation.navigate('Chat', { channel: item });
+    }
   };
 
-  const renderSectionHeader = ({ section }) => {
-    const isCollapsed = section.isCollapsed;
-
-    return (
-      <TouchableOpacity
-        style={styles.sectionHeader}
-        onPress={() => toggleCategory(section.title)}
-        activeOpacity={0.7}
-      >
-        <MaterialCommunityIcons
-          name={isCollapsed ? 'chevron-right' : 'chevron-down'}
-          size={18}
-          color={colors.textMuted}
-          style={styles.chevronIcon}
-        />
-        <Text style={styles.sectionTitle}>{section.title}</Text>
-        <View style={styles.sectionBadge}>
-          <Text style={styles.sectionBadgeText}>{section.totalCount}</Text>
-        </View>
-      </TouchableOpacity>
-    );
-  };
-
-  const totalChannelsCount = sections.reduce(
-    (acc, sec) => acc + sec.totalCount,
-    0
+  const renderSectionHeader = ({ section }) => (
+    <TouchableOpacity
+      style={styles.sectionHeader}
+      onPress={() => toggleCategory(section.title)}
+      activeOpacity={0.7}
+    >
+      <MaterialCommunityIcons
+        name={section.isCollapsed ? 'chevron-right' : 'chevron-down'}
+        size={18}
+        color={colors.textMuted}
+        style={styles.chevronIcon}
+      />
+      <Text style={styles.sectionTitle}>{section.title}</Text>
+      <View style={styles.sectionBadge}>
+        <Text style={styles.sectionBadgeText}>{section.totalCount}</Text>
+      </View>
+    </TouchableOpacity>
   );
+
+  if (profileLoading || loading) {
+    return (
+      <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+        <View style={extra.center}>
+          <ActivityIndicator size="large" color={colors.primary} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (!branch) {
+    return (
+      <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+        <View style={extra.center}>
+          <Text style={extra.pickTitle}>Choose your branch</Text>
+          <Text style={extra.pickSub}>This decides which branch channels you can see.</Text>
+          {BRANCHES.map((b) => (
+            <TouchableOpacity
+              key={b}
+              style={[extra.branchButton, { borderColor: colors.branches[b] }]}
+              onPress={() => pickBranch(b)}
+              activeOpacity={0.8}
+            >
+              <Text style={[extra.branchButtonText, { color: colors.branches[b] }]}>{b}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
       <StatusBar barStyle="light-content" backgroundColor={colors.background} />
 
-      {/* Header with Workspace Name & Badge */}
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <View style={[styles.serverIcon, { backgroundColor: `${branchColor}30`, borderColor: branchColor }]}>
@@ -155,15 +215,30 @@ const ChannelListScreen = ({ navigation }) => {
           </View>
         </View>
 
-        <View style={[styles.branchPill, { backgroundColor: `${branchColor}20`, borderColor: branchColor }]}>
-          <View style={[styles.branchDot, { backgroundColor: branchColor }]} />
-          <Text style={[styles.branchPillText, { color: branchColor }]}>
-            {branch}
-          </Text>
+        <View style={extra.headerActions}>
+          <TouchableOpacity
+            style={extra.iconButton}
+            onPress={() => navigation.navigate('NewMessage')}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <MaterialCommunityIcons name="message-plus-outline" size={22} color={colors.text} />
+          </TouchableOpacity>
+          {isAdmin && (
+            <TouchableOpacity
+              style={extra.iconButton}
+              onPress={() => navigation.navigate('ManageCreators')}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <MaterialCommunityIcons name="shield-account-outline" size={22} color={colors.text} />
+            </TouchableOpacity>
+          )}
+          <View style={[styles.branchPill, { backgroundColor: `${branchColor}20`, borderColor: branchColor }]}>
+            <View style={[styles.branchDot, { backgroundColor: branchColor }]} />
+            <Text style={[styles.branchPillText, { color: branchColor }]}>{branch}</Text>
+          </View>
         </View>
       </View>
 
-      {/* Search Bar */}
       <View style={styles.searchContainer}>
         <View style={styles.searchBar}>
           <MaterialCommunityIcons
@@ -186,60 +261,70 @@ const ChannelListScreen = ({ navigation }) => {
               onPress={() => setSearchQuery('')}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             >
-              <MaterialCommunityIcons
-                name="close-circle"
-                size={18}
-                color={colors.textMuted}
-              />
+              <MaterialCommunityIcons name="close-circle" size={18} color={colors.textMuted} />
             </TouchableOpacity>
           )}
         </View>
       </View>
 
-      {/* Channel Sections List */}
       <SectionList
         sections={sections}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
-          <ChannelItem
-            channel={item}
-            onPress={() => handleChannelPress(item)}
-          />
+          <ChannelItem channel={item} onPress={() => handleItemPress(item)} />
         )}
         renderSectionHeader={renderSectionHeader}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
         stickySectionHeadersEnabled={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => load(true)}
+            tintColor={colors.primary}
+          />
+        }
         ListEmptyComponent={
-          totalChannelsCount === 0 ? (
-            <View style={styles.emptyContainer}>
-              <MaterialCommunityIcons
-                name="message-text-outline"
-                size={48}
-                color={colors.textMuted}
-                style={styles.emptyIcon}
-              />
-              <Text style={styles.emptyTitle}>No Channels Found</Text>
-              <Text style={styles.emptySubtitle}>
-                No channels match "{searchQuery}". Try a different keyword.
-              </Text>
-            </View>
-          ) : null
+          <View style={styles.emptyContainer}>
+            <MaterialCommunityIcons
+              name="message-text-outline"
+              size={48}
+              color={colors.textMuted}
+              style={styles.emptyIcon}
+            />
+            <Text style={styles.emptyTitle}>
+              {loadError ? 'Could not load channels' : 'No Channels Found'}
+            </Text>
+            <Text style={styles.emptySubtitle}>
+              {loadError || `No channels match "${searchQuery}". Try a different keyword.`}
+            </Text>
+          </View>
         }
       />
 
-      {/* Floating Action Button (FAB) for Create Channel */}
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={handleCreateChannel}
-        activeOpacity={0.85}
-      >
+      <TouchableOpacity style={styles.fab} onPress={handleCreateChannel} activeOpacity={0.85}>
         <MaterialCommunityIcons name="plus" size={28} color={colors.white} />
       </TouchableOpacity>
     </SafeAreaView>
   );
 };
 
+const extra = StyleSheet.create({
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
+  pickTitle: { fontSize: 22, fontWeight: '800', color: colors.text, marginBottom: 6 },
+  pickSub: { fontSize: 13, color: colors.textMuted, marginBottom: 24, textAlign: 'center' },
+  branchButton: {
+    width: '70%',
+    paddingVertical: 14,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  branchButtonText: { fontSize: 16, fontWeight: '700' },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  iconButton: { padding: 2 },
+});
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,

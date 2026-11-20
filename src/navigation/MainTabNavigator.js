@@ -9,12 +9,17 @@ import AttendanceScreen from '../screens/attendance/AttendanceScreen';
 import TimetableScreen from '../screens/timetable/TimetableScreen';
 import ChannelListScreen from '../screens/channels/ChannelListScreen';
 import ChatScreen from '../screens/channels/ChatScreen';
+import NewMessageScreen from '../screens/channels/NewMessageScreen';
+import CreateChannelScreen from '../screens/channels/CreateChannelScreen';
+import ManageCreatorsScreen from '../screens/channels/ManageCreatorsScreen';
 import ProfileScreen from '../screens/profile/ProfileScreen';
+import EditProfileScreen from '../screens/profile/EditProfileScreen';
 
 import colors from '../theme/colors';
 
 const Tab = createBottomTabNavigator();
 const ChannelsStack = createStackNavigator();
+const ProfileStack = createStackNavigator();
 
 const ChannelsStackNavigator = () => {
   return (
@@ -27,7 +32,25 @@ const ChannelsStackNavigator = () => {
     >
       <ChannelsStack.Screen name="ChannelList" component={ChannelListScreen} />
       <ChannelsStack.Screen name="Chat" component={ChatScreen} />
+      <ChannelsStack.Screen name="NewMessage" component={NewMessageScreen} />
+      <ChannelsStack.Screen name="CreateChannel" component={CreateChannelScreen} />
+      <ChannelsStack.Screen name="ManageCreators" component={ManageCreatorsScreen} />
     </ChannelsStack.Navigator>
+  );
+};
+
+const ProfileStackNavigator = () => {
+  return (
+    <ProfileStack.Navigator
+      initialRouteName="ProfileMain"
+      screenOptions={{
+        headerShown: false,
+        cardStyle: { backgroundColor: colors.background },
+      }}
+    >
+      <ProfileStack.Screen name="ProfileMain" component={ProfileScreen} />
+      <ProfileStack.Screen name="EditProfile" component={EditProfileScreen} />
+    </ProfileStack.Navigator>
   );
 };
 
@@ -96,7 +119,7 @@ const MainTabNavigator = () => {
       />
       <Tab.Screen
         name="Profile"
-        component={ProfileScreen}
+        component={ProfileStackNavigator}
         options={{
           tabBarLabel: 'Profile',
         }}

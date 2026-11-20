@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   StyleSheet,
   Text,
@@ -10,289 +10,288 @@ import {
   Platform,
   Alert,
   StatusBar,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useApp } from '../../context/AppContext';
-import { getMessagesForChannel } from '../../data/channelsData';
+import { useAuth } from '../../auth/AuthContext';
+import useProfile from '../../hooks/useProfile';
+import { supabase } from '../../lib/supabase';
+import { fetchThreadMessages, sendThreadMessage, subscribeToThread, toBubble } from '../../lib/chat';
 import MessageBubble from '../../components/MessageBubble';
 import colors from '../../theme/colors';
 
 const ChatScreen = ({ route, navigation }) => {
-  const { user } = useApp();
-  const channel = route?.params?.channel || {
-    id: 'general',
-    name: 'general',
-    description: 'Welcome to the channel!',
-    unreadCount: 0,
-  };
+  const { user } = useAuth();
+  const { profile } = useProfile();
+  const channel = route?.params?.channel;
+  const dm = route?.params?.dm;
+  const isDm = Boolean(dm);
+  const targetId = isDm ? dm.conversationId : channel?.id;
+  const kind = isDm ? 'dm' : 'channel';
+  const myId = user?.id;
 
   const flatListRef = useRef(null);
   const [inputText, setInputText] = useState('');
+  const [messages, setMessages] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [memberCount, setMemberCount] = useState(null);
 
-  // Load initial messages from mock data and reverse for inverted FlatList
-  const [messages, setMessages] = useState(() => {
-    const raw = getMessagesForChannel(channel.id) || [];
-    if (raw.length > 0) {
-      // Map to normalize fields (time, isOwn)
-      const normalized = raw.map((m) => ({
-        ...m,
-        time: m.time || m.timestamp || '12:00 PM',
-        isOwn: m.isOwn ?? Boolean(m.isUser),
-      }));
-      // Inverted list needs newest at index 0
-      return [...normalized].reverse();
-    }
+  const addMessage = useCallback(
+    (row) => {
+      const bubble = toBubble(row, myId);
+      setMessages((prev) =>
+        prev.some((m) => m.id === bubble.id) ? prev : [bubble, ...prev]
+      );
+    },
+    [myId]
+  );
 
-    // Default welcome messages if channel has no existing mock messages
-    return [
-      {
-        id: 'init-2',
-        sender: 'Bot Helper',
-        avatar: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=150',
-        text: `Welcome to #${channel.name}! Feel free to discuss topics, share resources, or ask questions.`,
-        time: '10:00 AM',
-        timestamp: '10:00 AM',
-        date: 'Today',
-        isOwn: false,
-      },
-      {
-        id: 'init-1',
-        sender: 'Council Admin',
-        avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150',
-        text: `Channel created for ${channel.description || channel.name}. Please follow college community guidelines.`,
-        time: '09:30 AM',
-        timestamp: '09:30 AM',
-        date: 'Today',
-        isOwn: false,
-      },
-    ];
-  });
+  // Load history and listen for new messages
+  useEffect(() => {
+    if (!targetId) return undefined;
+    let active = true;
 
-  // Calculate approximate member count based on channel scope
-  const memberCount = useMemo(() => {
-    if (channel.id?.includes('general') || channel.category === 'GENERAL') {
-      return 342;
-    }
-    if (channel.id?.includes('cse') || channel.category === 'CSE') {
-      return 148;
-    }
-    if (channel.id?.includes('dsai') || channel.category === 'DSAI') {
-      return 96;
-    }
-    if (channel.id?.includes('ece') || channel.category === 'ECE') {
-      return 112;
-    }
-    return 120;
-  }, [channel]);
+    (async () => {
+      try {
+        const rows = await fetchThreadMessages(kind, targetId);
+        if (active) {
+          setMessages((prev) => {
+            const ids = new Set(prev.map((m) => m.id));
+            const older = rows.map((r) => toBubble(r, myId)).filter((m) => !ids.has(m.id));
+            return [...prev, ...older];
+          });
+        }
+      } catch (e) {
+        Alert.alert('Could not load messages', e.message);
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
 
-  const handleSendMessage = () => {
-    const trimmed = inputText.trim();
-    if (!trimmed) return;
+    const unsubscribe = subscribeToThread(kind, targetId, (row) => {
+      if (active) addMessage(row);
+    });
 
-    const now = new Date();
-    const hours = now.getHours();
-    const minutes = now.getMinutes().toString().padStart(2, '0');
-    const ampm = hours >= 12 ? 'PM' : 'AM';
-    const displayHours = (hours % 12 || 12).toString().padStart(2, '0');
-    const timeString = `${displayHours}:${minutes} ${ampm}`;
-
-    const newMessage = {
-      id: `msg-${Date.now()}`,
-      sender: user?.name || 'You',
-      avatar: user?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
-      text: trimmed,
-      time: timeString,
-      timestamp: timeString,
-      date: 'Today',
-      isOwn: true,
-      isUser: true,
+    return () => {
+      active = false;
+      unsubscribe();
     };
+  }, [kind, targetId, myId, addMessage]);
 
-    // Prepend to inverted list
-    setMessages((prev) => [newMessage, ...prev]);
-    setInputText('');
+  // Member count = students who have signed in (for this branch, if it is a branch channel)
+  useEffect(() => {
+    if (isDm || !channel?.id) return;
+    (async () => {
+      let q = supabase.from('profiles').select('id', { count: 'exact', head: true });
+      if (channel?.branch) q = q.eq('branch', channel.branch);
+      const { count } = await q;
+      if (count != null) setMemberCount(count);
+    })();
+  }, [isDm, channel?.id, channel?.branch]);
 
-    // Scroll to bottom (offset 0 in inverted list)
-    flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+  const canPost = isDm || !channel?.admin_only_post || profile?.role === 'admin';
+
+  const handleSendMessage = async () => {
+    const trimmed = inputText.trim();
+    if (!trimmed || sending || !targetId) return;
+    setSending(true);
+    try {
+      const row = await sendThreadMessage(kind, targetId, trimmed);
+      addMessage(row);
+      setInputText('');
+      flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+    } catch (e) {
+      Alert.alert('Message not sent', e.message);
+    } finally {
+      setSending(false);
+    }
   };
 
   const handleAttachment = () => {
-    Alert.alert(
-      'Attachments',
-      'Media and document uploads are coming in the next update!',
-      [{ text: 'OK' }]
-    );
+    Alert.alert('Attachments', 'Media and document uploads are coming in a later update!', [
+      { text: 'OK' },
+    ]);
   };
 
+  if (!channel && !dm) return null;
+
+  const chatTitle = isDm ? (dm.otherUser?.name || 'Direct Message') : channel.name;
+  const chatSubtitle = isDm ? (dm.otherUser?.email || 'Direct Conversation') : (channel.description || 'General discussion');
+  const chatPlaceholder = isDm ? `Message ${dm.otherUser?.name || 'student'}` : `Message #${channel?.name}`;
+
   const renderItem = ({ item, index }) => {
-    // In inverted FlatList:
-    // item is current message.
-    // Older message in chronological order is at index + 1!
     const olderMessage = messages[index + 1];
-
-    // Consecutive if the immediately preceding older message has the exact same sender & date
     const isConsecutive = Boolean(
-      olderMessage &&
-        olderMessage.sender === item.sender &&
-        olderMessage.date === item.date
+      olderMessage && olderMessage.sender === item.sender && olderMessage.date === item.date
     );
-
-    // Show date divider if this message is the first message of a new day
-    // (i.e. older message has a different date or does not exist)
-    const showDateSeparator = Boolean(
-      !olderMessage || olderMessage.date !== item.date
-    );
+    const showDateSeparator = Boolean(!olderMessage || olderMessage.date !== item.date);
 
     return (
       <View>
-        {/* Date separator displayed above the first message of each day */}
         {showDateSeparator && (
           <View style={styles.dateSeparatorRow}>
             <View style={styles.dateSeparatorLine} />
             <View style={styles.dateSeparatorBadge}>
-              <Text style={styles.dateSeparatorText}>
-                {item.date || 'Today'}
-              </Text>
+              <Text style={styles.dateSeparatorText}>{item.date || 'Today'}</Text>
             </View>
             <View style={styles.dateSeparatorLine} />
           </View>
         )}
-
         <MessageBubble message={item} isConsecutive={isConsecutive} />
       </View>
     );
   };
 
+  const hasText = inputText.trim().length > 0;
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
       <StatusBar barStyle="light-content" backgroundColor={colors.surface} />
 
-      {/* Custom Discord-style Header */}
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.backButton}
           onPress={() => navigation.goBack()}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
         >
-          <MaterialCommunityIcons
-            name="arrow-left"
-            size={24}
-            color={colors.text}
-          />
+          <MaterialCommunityIcons name="arrow-left" size={24} color={colors.text} />
         </TouchableOpacity>
 
         <View style={styles.headerInfo}>
           <View style={styles.channelTitleRow}>
             <MaterialCommunityIcons
-              name="pound"
+              name={isDm ? "account-circle-outline" : "pound"}
               size={20}
               color={colors.textSecondary}
               style={styles.poundIcon}
             />
             <Text style={styles.channelTitle} numberOfLines={1}>
-              {channel.name}
+              {chatTitle}
             </Text>
           </View>
           <Text style={styles.channelTopic} numberOfLines={1}>
-            {channel.description || channel.topic || 'General discussion'}
+            {chatSubtitle}
           </Text>
         </View>
 
-        {/* Member Count Pill */}
-        <View style={styles.memberPill}>
-          <MaterialCommunityIcons
-            name="account-group"
-            size={15}
-            color={colors.textSecondary}
-            style={styles.memberIcon}
-          />
-          <Text style={styles.memberCountText}>{memberCount}</Text>
-        </View>
+        {memberCount != null && (
+          <View style={styles.memberPill}>
+            <MaterialCommunityIcons
+              name="account-group"
+              size={15}
+              color={colors.textSecondary}
+              style={styles.memberIcon}
+            />
+            <Text style={styles.memberCountText}>{memberCount}</Text>
+          </View>
+        )}
       </View>
 
-      {/* Keyboard Avoiding Container for Messages & Input */}
       <KeyboardAvoidingView
         style={styles.chatContainer}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
       >
-        {/* Inverted Messages List */}
-        <FlatList
-          ref={flatListRef}
-          data={messages}
-          keyExtractor={(item) => item.id}
-          renderItem={renderItem}
-          inverted
-          contentContainerStyle={styles.messagesList}
-          showsVerticalScrollIndicator={false}
-          ListFooterComponent={
-            <View style={styles.channelWelcomeCard}>
-              <View style={styles.welcomePoundCircle}>
-                <MaterialCommunityIcons
-                  name="pound"
-                  size={36}
-                  color={colors.white}
-                />
-              </View>
-              <Text style={styles.welcomeTitle}>Welcome to #{channel.name}!</Text>
-              <Text style={styles.welcomeSubtitle}>
-                This is the start of the #{channel.name} channel.
-              </Text>
-            </View>
-          }
-        />
-
-        {/* Message Input Bottom Bar */}
-        <View style={styles.inputContainer}>
-          <View style={styles.inputBar}>
-            {/* Attachment Button */}
-            <TouchableOpacity
-              style={styles.iconButton}
-              onPress={handleAttachment}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <MaterialCommunityIcons
-                name="plus-circle"
-                size={24}
-                color={colors.textMuted}
-              />
-            </TouchableOpacity>
-
-            {/* Input Field */}
-            <TextInput
-              style={styles.textInput}
-              placeholder={`Message #${channel.name}`}
-              placeholderTextColor={colors.textMuted}
-              value={inputText}
-              onChangeText={setInputText}
-              multiline
-              maxLength={1000}
-            />
-
-            {/* Send Button */}
-            <TouchableOpacity
-              style={[
-                styles.sendButton,
-                inputText.trim().length > 0 && styles.sendButtonActive,
-              ]}
-              onPress={handleSendMessage}
-              disabled={inputText.trim().length === 0}
-              activeOpacity={0.8}
-            >
-              <MaterialCommunityIcons
-                name="send"
-                size={18}
-                color={inputText.trim().length > 0 ? colors.white : colors.textMuted}
-              />
-            </TouchableOpacity>
+        {loading && messages.length === 0 ? (
+          <View style={extra.center}>
+            <ActivityIndicator size="large" color={colors.primary} />
           </View>
-        </View>
+        ) : (
+          <FlatList
+            ref={flatListRef}
+            data={messages}
+            keyExtractor={(item) => item.id}
+            renderItem={renderItem}
+            inverted
+            contentContainerStyle={styles.messagesList}
+            showsVerticalScrollIndicator={false}
+            ListFooterComponent={
+              <View style={styles.channelWelcomeCard}>
+                <View style={styles.welcomePoundCircle}>
+                  <MaterialCommunityIcons
+                    name={isDm ? "account-outline" : "pound"}
+                    size={36}
+                    color={colors.white}
+                  />
+                </View>
+                <Text style={styles.welcomeTitle}>
+                  {isDm ? chatTitle : `Welcome to #${channel.name}!`}
+                </Text>
+                <Text style={styles.welcomeSubtitle}>
+                  {isDm
+                    ? `This is the start of your direct conversation with ${chatTitle}.`
+                    : `This is the start of the #${channel.name} channel.`}
+                </Text>
+              </View>
+            }
+          />
+        )}
+
+        {canPost ? (
+          <View style={styles.inputContainer}>
+            <View style={styles.inputBar}>
+              <TouchableOpacity
+                style={styles.iconButton}
+                onPress={handleAttachment}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <MaterialCommunityIcons name="plus-circle" size={24} color={colors.textMuted} />
+              </TouchableOpacity>
+
+              <TextInput
+                style={styles.textInput}
+                placeholder={chatPlaceholder}
+                placeholderTextColor={colors.textMuted}
+                value={inputText}
+                onChangeText={setInputText}
+                multiline
+                maxLength={1000}
+              />
+
+              <TouchableOpacity
+                style={[styles.sendButton, hasText && styles.sendButtonActive]}
+                onPress={handleSendMessage}
+                disabled={!hasText || sending}
+                activeOpacity={0.8}
+              >
+                {sending ? (
+                  <ActivityIndicator size="small" color={colors.white} />
+                ) : (
+                  <MaterialCommunityIcons
+                    name="send"
+                    size={18}
+                    color={hasText ? colors.white : colors.textMuted}
+                  />
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : (
+          <View style={extra.readOnlyBar}>
+            <MaterialCommunityIcons name="lock-outline" size={16} color={colors.textMuted} />
+            <Text style={extra.readOnlyText}>Only admins can post in this channel</Text>
+          </View>
+        )}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 };
 
+const extra = StyleSheet.create({
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  readOnlyBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 16,
+    backgroundColor: colors.background,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  readOnlyText: { fontSize: 13, color: colors.textMuted },
+});
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,

@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from "react";
 import * as WebBrowser from "expo-web-browser";
 import * as Google from "expo-auth-session/providers/google";
 import * as SecureStore from "expo-secure-store";
+import { supabase } from "../lib/supabase";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -34,44 +35,65 @@ export function AuthProvider({ children }) {
     webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
     androidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID,
     iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
-    scopes: ["profile", "email"],
-    extraParams: { hd: ALLOWED_DOMAIN, prompt: "select_account" }, // UI hint only
+    scopes: ["openid", "profile", "email"],
+    extraParams: { hd: ALLOWED_DOMAIN, prompt: "select_account" },
   });
 
-  // Restore session on app start
+  // Restore the session when the app starts
   useEffect(() => {
     (async () => {
       try {
-        const stored = await SecureStore.getItemAsync("user");
-        if (stored) setUser(JSON.parse(stored));
+        const { data } = await supabase.auth.getSession();
+        const sbUser = data?.session?.user;
+        const email = (sbUser?.email || "").toLowerCase();
+
+        if (sbUser && email.endsWith(`@${ALLOWED_DOMAIN}`)) {
+          const meta = sbUser.user_metadata || {};
+          setUser({
+            id: sbUser.id,
+            email: sbUser.email,
+            name: meta.full_name || meta.name || sbUser.email,
+            picture: meta.avatar_url || meta.picture,
+          });
+        } else {
+          await SecureStore.deleteItemAsync("user");
+          setUser(null);
+        }
+      } catch (e) {
+        setUser(null);
       } finally {
         setLoading(false);
       }
     })();
   }, []);
 
-  // Handle Google response
+  // Handle the response from Google
   useEffect(() => {
     if (response?.type !== "success") return;
     (async () => {
       try {
-        const token = response.authentication.accessToken;
-        const profile = await fetchGoogleProfile(token);
+        const { accessToken, idToken } = response.authentication || {};
+        if (!idToken) throw new Error("Google did not return an ID token");
 
+        const profile = await fetchGoogleProfile(accessToken);
         if (!isAllowed(profile)) {
           setError(`Only @${ALLOWED_DOMAIN} accounts are allowed.`);
           return;
         }
 
-        const u = {
+        const { data, error: sbError } = await supabase.auth.signInWithIdToken({
+          provider: "google",
+          token: idToken,
+        });
+        if (sbError) throw sbError;
+
+        setError(null);
+        setUser({
+          id: data.user.id,
           email: profile.email,
           name: profile.name,
           picture: profile.picture,
-          accessToken: token,
-        };
-        await SecureStore.setItemAsync("user", JSON.stringify(u));
-        setError(null);
-        setUser(u);
+        });
       } catch (e) {
         setError(e.message);
       }
@@ -84,12 +106,15 @@ export function AuthProvider({ children }) {
   };
 
   const signOut = async () => {
+    await supabase.auth.signOut();
     await SecureStore.deleteItemAsync("user");
     setUser(null);
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, error, signIn, signOut, ready: !!request }}>
+    <AuthContext.Provider
+      value={{ user, loading, error, signIn, signOut, ready: !!request }}
+    >
       {children}
     </AuthContext.Provider>
   );
