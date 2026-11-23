@@ -41,6 +41,10 @@ const LEETCODE_GRAPHQL_QUERY = `query getUserProfile($username: String!) {
       ranking
       reputation
       starRating
+      aboutMe
+      realName
+      school
+      company
     }
     submitStatsGlobal {
       acSubmissionNum {
@@ -124,6 +128,10 @@ async function fetchLeetCodeStats(username, timeoutMs = FETCH_TIMEOUT_MS) {
       contestsAttended: userContestRanking?.attendedContestsCount ?? 0,
       contestBadge: matchedUser.contestBadge?.name ?? null,
       badge: matchedUser.contestBadge?.name ?? null,
+      aboutMe: matchedUser.profile?.aboutMe ?? '',
+      realName: matchedUser.profile?.realName ?? '',
+      school: matchedUser.profile?.school ?? '',
+      company: matchedUser.profile?.company ?? '',
     };
   } catch (error) {
     return { error: error.message || 'Could not fetch stats' };
@@ -170,6 +178,11 @@ async function fetchCodeforcesStats(username, timeoutMs = FETCH_TIMEOUT_MS) {
       contribution: user.contribution ?? 0,
       friendOfCount: user.friendOfCount ?? 0,
       registrationTimeSeconds: user.registrationTimeSeconds ?? null,
+      organization: user.organization ?? '',
+      firstName: user.firstName ?? '',
+      lastName: user.lastName ?? '',
+      city: user.city ?? '',
+      country: user.country ?? '',
     };
   } catch (error) {
     return { error: error.message || 'Could not fetch stats' };
@@ -229,6 +242,9 @@ async function fetchCodeChefStats(username, timeoutMs = FETCH_TIMEOUT_MS) {
       totalSolved: parseNum(
         json.totalProblemsSolved ?? json.totalSolved ?? json.problemsSolved
       ) ?? 0,
+      name: json.name ?? '',
+      institution: json.institution ?? json.organization ?? '',
+      country: json.country ?? '',
     };
   } catch (error) {
     return { error: error.message || 'Could not fetch stats' };
@@ -265,6 +281,26 @@ async function fetchChessStats(username, timeoutMs = FETCH_TIMEOUT_MS) {
 
     const json = await response.json();
 
+    // Also attempt to fetch player profile for location/name (useful for verification)
+    let profileDetails = {};
+    try {
+      const pRes = await fetchWithTimeout(
+        `https://api.chess.com/pub/player/${encodeURIComponent(cleanUser.toLowerCase())}`,
+        {
+          headers: {
+            'User-Agent': 'IIIT-NR-Workspace-App (Student Workspace)',
+            Accept: 'application/json',
+          },
+        },
+        5000
+      );
+      if (pRes.ok) {
+        profileDetails = await pRes.json();
+      }
+    } catch (e) {
+      // Ignore chess profile error
+    }
+
     const parseTimeControl = (control) => ({
       rating: control?.last?.rating ?? null,
       best: control?.best?.rating ?? null,
@@ -292,6 +328,9 @@ async function fetchChessStats(username, timeoutMs = FETCH_TIMEOUT_MS) {
       bullet,
       totalGames,
       overallWinRate,
+      name: profileDetails.name ?? '',
+      location: profileDetails.location ?? '',
+      status: profileDetails.status ?? '',
     };
   } catch (error) {
     return { error: error.message || 'Could not fetch stats' };
@@ -337,6 +376,9 @@ async function fetchGitHubStats(username, timeoutMs = FETCH_TIMEOUT_MS) {
       company: json.company ?? null,
       location: json.location ?? null,
       createdAt: json.created_at ?? null,
+      email: json.email ?? '',
+      name: json.name ?? '',
+      blog: json.blog ?? '',
     };
   } catch (error) {
     return { error: error.message || 'Could not fetch stats' };
@@ -487,6 +529,133 @@ export const fetchPlatformStats = async (platformId, username) => {
   }
 };
 
+export const generateVerificationToken = (userIdentifier = '') => {
+  let hash = 0;
+  const str = String(userIdentifier || 'student').toLowerCase();
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash << 5) - hash + str.charCodeAt(i);
+    hash |= 0;
+  }
+  const positive = Math.abs(hash).toString(36).toUpperCase().padStart(4, '0').slice(-4);
+  return `IIITNR-${positive}`;
+};
+
+export const verifyPlatformOwnership = async (
+  platformId,
+  username,
+  userEmail = '',
+  token = '',
+  personalEmail = ''
+) => {
+  if (!platformId || !username) {
+    return { verified: false, reason: 'Platform and username are required.' };
+  }
+
+  const clean = cleanUsername(platformId, username);
+  if (!clean) {
+    return { verified: false, reason: 'Invalid username format.' };
+  }
+
+  const expectedToken = (token || generateVerificationToken(userEmail)).trim().toUpperCase();
+  const expectedEmail = (userEmail || '').trim().toLowerCase();
+  const expectedPersonalEmail = (personalEmail || '').trim().toLowerCase();
+  const emailPrefix = expectedEmail.includes('@') ? expectedEmail.split('@')[0] : '';
+  const personalPrefix = expectedPersonalEmail.includes('@') ? expectedPersonalEmail.split('@')[0] : '';
+
+  try {
+    const stats = await fetchPlatformStats(platformId, clean);
+    if (stats.error) {
+      return { verified: false, reason: `Could not reach ${platformId}: ${stats.error}` };
+    }
+
+    // 1. Direct GitHub public email match
+    if (platformId === 'github' && stats.email) {
+      const ghEmail = stats.email.toLowerCase();
+      if (
+        ghEmail === expectedEmail ||
+        (expectedPersonalEmail && ghEmail === expectedPersonalEmail)
+      ) {
+        return {
+          verified: true,
+          method: 'public_email',
+          message: 'Matched public GitHub email with your account.',
+        };
+      }
+    }
+
+    // 2. Collect all available public profile text
+    const textPool = [
+      stats.bio,
+      stats.aboutMe,
+      stats.realName,
+      stats.name,
+      stats.organization,
+      stats.institution,
+      stats.location,
+      stats.company,
+      stats.school,
+      stats.blog,
+      stats.firstName,
+      stats.lastName,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+
+    // Check match criteria
+    const tokenMatched = expectedToken && textPool.includes(expectedToken.toLowerCase());
+    const emailMatched = expectedEmail && textPool.includes(expectedEmail);
+    const personalEmailMatched =
+      expectedPersonalEmail && textPool.includes(expectedPersonalEmail);
+    const prefixMatched =
+      emailPrefix.length >= 4 &&
+      textPool.includes(emailPrefix) &&
+      (textPool.includes('iiit') || textPool.includes('nr') || textPool.includes('naya raipur'));
+    const personalPrefixMatched =
+      personalPrefix.length >= 4 && textPool.includes(personalPrefix);
+
+    if (
+      tokenMatched ||
+      emailMatched ||
+      personalEmailMatched ||
+      prefixMatched ||
+      personalPrefixMatched
+    ) {
+      let method = 'verification_code';
+      if (tokenMatched) method = 'verification_code';
+      else if (personalEmailMatched || personalPrefixMatched) method = 'personal_email';
+      else method = 'college_email';
+
+      return {
+        verified: true,
+        method,
+        message: 'Account ownership confirmed! Connected to your identity.',
+      };
+    }
+
+    const identifiersTried = [
+      `Verification code '${expectedToken}'`,
+      expectedEmail ? `college email '${expectedEmail}'` : null,
+      expectedPersonalEmail ? `personal email '${expectedPersonalEmail}'` : null,
+    ]
+      .filter(Boolean)
+      .join(' or ');
+
+    return {
+      verified: false,
+      reason: `Could not find ${identifiersTried} on @${clean}'s public profile.`,
+      expectedToken,
+      expectedEmail,
+      expectedPersonalEmail,
+    };
+  } catch (err) {
+    return {
+      verified: false,
+      reason: err.message || 'Verification request timed out.',
+    };
+  }
+};
+
 export default {
   PLATFORMS,
   getPlatformList,
@@ -495,4 +664,6 @@ export default {
   extractUsername,
   getProfileUrl,
   fetchPlatformStats,
+  generateVerificationToken,
+  verifyPlatformOwnership,
 };

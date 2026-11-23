@@ -140,7 +140,11 @@ const HomeScreen = ({ navigation }) => {
         {/* Quick Stats Row (3 cards) */}
         <View style={styles.statsContainer}>
           {/* Card 1: Today's Classes */}
-          <View style={styles.statCard}>
+          <TouchableOpacity
+            style={styles.statCard}
+            activeOpacity={0.75}
+            onPress={() => navigation?.navigate && navigation.navigate('Timetable')}
+          >
             <LinearGradient
               colors={['rgba(108, 92, 231, 0.15)', 'transparent']}
               style={styles.statCardGradient}
@@ -160,10 +164,14 @@ const HomeScreen = ({ navigation }) => {
               <Text style={styles.statValue}>{classesToday.length}</Text>
               <Text style={styles.statLabel}>Today's Classes</Text>
             </LinearGradient>
-          </View>
+          </TouchableOpacity>
 
           {/* Card 2: Attendance % */}
-          <View style={styles.statCard}>
+          <TouchableOpacity
+            style={styles.statCard}
+            activeOpacity={0.75}
+            onPress={() => navigation?.navigate && navigation.navigate('Attendance')}
+          >
             <LinearGradient
               colors={['rgba(0, 184, 148, 0.15)', 'transparent']}
               style={styles.statCardGradient}
@@ -183,10 +191,14 @@ const HomeScreen = ({ navigation }) => {
               <Text style={styles.statValue}>{attendanceDisplay}</Text>
               <Text style={styles.statLabel}>Attendance</Text>
             </LinearGradient>
-          </View>
+          </TouchableOpacity>
 
           {/* Card 3: Channels Unread */}
-          <View style={styles.statCard}>
+          <TouchableOpacity
+            style={styles.statCard}
+            activeOpacity={0.75}
+            onPress={() => navigation?.navigate && navigation.navigate('Channels')}
+          >
             <LinearGradient
               colors={['rgba(253, 121, 168, 0.15)', 'transparent']}
               style={styles.statCardGradient}
@@ -206,7 +218,7 @@ const HomeScreen = ({ navigation }) => {
               <Text style={styles.statValue}>{unreadCount}</Text>
               <Text style={styles.statLabel}>Unread Msgs</Text>
             </LinearGradient>
-          </View>
+          </TouchableOpacity>
         </View>
 
         {/* Today's Schedule Section */}

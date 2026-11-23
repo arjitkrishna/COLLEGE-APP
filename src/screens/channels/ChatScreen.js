@@ -110,9 +110,31 @@ const ChatScreen = ({ route, navigation }) => {
   };
 
   const handleAttachment = () => {
-    Alert.alert('Attachments', 'Media and document uploads are coming in a later update!', [
-      { text: 'OK' },
-    ]);
+    Alert.alert(
+      'Channel Attachment',
+      'Select a format to insert into your message:',
+      [
+        {
+          text: 'Code Snippet (C++/Python)',
+          onPress: () => {
+            setInputText((prev) =>
+              prev
+                ? `${prev}\n\`\`\`cpp\n// Paste your solution/code here\n\`\`\``
+                : '```cpp\n// Paste your solution/code here\n```'
+            );
+          },
+        },
+        {
+          text: 'Resource / Question Tag',
+          onPress: () => {
+            setInputText((prev) =>
+              prev ? `${prev}\n📌 [Resource/Doubt]: ` : '📌 [Resource/Doubt]: '
+            );
+          },
+        },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
   };
 
   if (!channel && !dm) return null;

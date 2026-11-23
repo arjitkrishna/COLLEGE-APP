@@ -11,10 +11,16 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import colors from '../../theme/colors';
-import { getPlatformList, cleanUsername } from '../../lib/platforms';
+import {
+  getPlatformList,
+  cleanUsername,
+  generateVerificationToken,
+  verifyPlatformOwnership,
+} from '../../lib/platforms';
 
 const DEFAULT_PLATFORMS = [
   {
@@ -64,17 +70,32 @@ const AddPlatformModal = ({
   onClose,
   onAdd,
   existingPlatforms = [],
+  userEmail = '',
 }) => {
   const [selectedPlatform, setSelectedPlatform] = useState(null);
   const [usernameInput, setUsernameInput] = useState('');
+  const [personalEmailInput, setPersonalEmailInput] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const [verifying, setVerifying] = useState(false);
+  const [verificationError, setVerificationError] = useState('');
+  const [verificationSuccess, setVerificationSuccess] = useState(null);
+  const [copiedCode, setCopiedCode] = useState(false);
+  const [copiedEmail, setCopiedEmail] = useState(false);
+
+  const verificationToken = generateVerificationToken(userEmail || 'student');
 
   // Reset local state when modal opens or closes
   useEffect(() => {
     if (visible) {
       setSelectedPlatform(null);
       setUsernameInput('');
+      setPersonalEmailInput('');
       setErrorMsg('');
+      setVerifying(false);
+      setVerificationError('');
+      setVerificationSuccess(null);
+      setCopiedCode(false);
+      setCopiedEmail(false);
     }
   }, [visible]);
 
@@ -101,42 +122,122 @@ const AddPlatformModal = ({
     setSelectedPlatform(platform);
     setUsernameInput('');
     setErrorMsg('');
+    setVerificationError('');
+    setVerificationSuccess(null);
   };
 
   const handleBackToList = () => {
     setSelectedPlatform(null);
     setUsernameInput('');
     setErrorMsg('');
+    setVerificationError('');
+    setVerificationSuccess(null);
   };
 
-  const handleSubmit = () => {
-    if (!selectedPlatform) return;
-
-    const raw = usernameInput.trim();
-    if (!raw) {
-      setErrorMsg('Please enter a username or profile URL');
-      return;
+  const copyToClipboard = (text, isEmail = false) => {
+    if (isEmail) {
+      setCopiedEmail(true);
+      setTimeout(() => setCopiedEmail(false), 2500);
+    } else {
+      setCopiedCode(true);
+      setTimeout(() => setCopiedCode(false), 2500);
     }
+    Alert.alert(
+      isEmail ? 'College Email' : 'Verification Code',
+      `${text}\n\n(Tip: Long-press or select the code on screen to copy)`
+    );
+  };
 
+  const parseUsername = () => {
+    const raw = usernameInput.trim();
+    if (!raw) return '';
     let parsed = raw;
     if (typeof cleanUsername === 'function') {
       parsed = cleanUsername(selectedPlatform.id, raw);
     } else {
       parsed = raw.replace(/^@/, '').replace(/\/+$/, '');
     }
+    return parsed;
+  };
+
+  // Perform live verification with external platform API
+  const handleVerifyAndLink = async () => {
+    if (!selectedPlatform) return;
+    const parsed = parseUsername();
 
     if (!parsed) {
-      setErrorMsg('Invalid username. Please enter a valid handle.');
+      setErrorMsg('Please enter a valid username or profile URL.');
       return;
     }
 
-    if (onAdd) {
-      onAdd(selectedPlatform.id, parsed);
+    setVerifying(true);
+    setVerificationError('');
+    setErrorMsg('');
+
+    try {
+      const result = await verifyPlatformOwnership(
+        selectedPlatform.id,
+        parsed,
+        userEmail,
+        verificationToken,
+        personalEmailInput.trim()
+      );
+
+      if (result.verified) {
+        setVerificationSuccess(result);
+        setTimeout(() => {
+          if (onAdd) {
+            onAdd(selectedPlatform.id, parsed, {
+              verified: true,
+              verifiedEmail: personalEmailInput.trim() || userEmail,
+              verifiedAt: new Date().toISOString(),
+              method: result.method || 'bio_verification',
+            });
+          }
+          if (onClose) onClose();
+        }, 800);
+      } else {
+        setVerificationError(
+          result.reason ||
+            `Could not verify ownership of @${parsed}. Make sure your bio contains '${verificationToken}' or your email.`
+        );
+      }
+    } catch (err) {
+      setVerificationError(err.message || 'Verification failed. Please try again.');
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  // Allow linking without verification (unverified badge)
+  const handleLinkUnverified = () => {
+    const parsed = parseUsername();
+    if (!parsed) {
+      setErrorMsg('Please enter a valid username or profile URL.');
+      return;
     }
 
-    if (onClose) {
-      onClose();
-    }
+    Alert.alert(
+      'Link as Unverified',
+      `Add @${parsed} without ownership verification? It will be marked with an "Unverified" warning badge on your profile.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Link Anyway',
+          onPress: () => {
+            if (onAdd) {
+              onAdd(selectedPlatform.id, parsed, {
+                verified: false,
+                verifiedEmail: null,
+                verifiedAt: null,
+                method: 'unverified',
+              });
+            }
+            if (onClose) onClose();
+          },
+        },
+      ]
+    );
   };
 
   return (
@@ -201,7 +302,7 @@ const AddPlatformModal = ({
                   keyboardShouldPersistTaps="handled"
                 >
                   {selectedPlatform ? (
-                    /* STEP 2: USERNAME INPUT */
+                    /* STEP 2: USERNAME INPUT & VERIFICATION */
                     <View style={styles.formContainer}>
                       {/* Platform Highlight Header */}
                       <View
@@ -261,6 +362,7 @@ const AddPlatformModal = ({
                           onChangeText={(text) => {
                             setUsernameInput(text);
                             if (errorMsg) setErrorMsg('');
+                            if (verificationError) setVerificationError('');
                           }}
                           placeholder={
                             selectedPlatform.placeholder ||
@@ -271,11 +373,13 @@ const AddPlatformModal = ({
                           autoCorrect={false}
                           autoFocus
                           returnKeyType="done"
-                          onSubmitEditing={handleSubmit}
                         />
                         {usernameInput.length > 0 && (
                           <TouchableOpacity
-                            onPress={() => setUsernameInput('')}
+                            onPress={() => {
+                              setUsernameInput('');
+                              setVerificationError('');
+                            }}
                             style={styles.clearInputBtn}
                           >
                             <MaterialCommunityIcons
@@ -292,36 +396,192 @@ const AddPlatformModal = ({
                         <Text style={styles.errorText}>{errorMsg}</Text>
                       ) : null}
 
-                      {/* Hint */}
-                      <View style={styles.hintContainer}>
-                        <MaterialCommunityIcons
-                          name="information-outline"
-                          size={15}
-                          color={colors.textMuted}
-                          style={{ marginRight: 6 }}
-                        />
-                        <Text style={styles.hintText}>
-                          You can paste a profile URL or just the username
+                      {/* OWNERSHIP VERIFICATION CARD */}
+                      <View style={styles.verificationCard}>
+                        <View style={styles.verificationHeader}>
+                          <MaterialCommunityIcons
+                            name="shield-check"
+                            size={20}
+                            color={colors.secondary}
+                            style={{ marginRight: 8 }}
+                          />
+                          <Text style={styles.verificationTitle}>
+                            Account Ownership Verification
+                          </Text>
+                        </View>
+
+                        <Text style={styles.verificationExplainer}>
+                          To prevent fake accounts and prove this profile is yours, link it with your verified college identity.
                         </Text>
+
+                        {/* Connected Email Tag */}
+                        {userEmail ? (
+                          <View style={styles.tokenBox}>
+                            <View style={styles.tokenLeft}>
+                              <Text style={styles.tokenLabel}>Your College Email</Text>
+                              <Text style={styles.tokenValue} numberOfLines={1} selectable={true}>
+                                {userEmail}
+                              </Text>
+                            </View>
+                            <TouchableOpacity
+                              style={styles.copySmallBtn}
+                              onPress={() => copyToClipboard(userEmail, true)}
+                              activeOpacity={0.7}
+                            >
+                              <MaterialCommunityIcons
+                                name={copiedEmail ? 'check' : 'content-copy'}
+                                size={16}
+                                color={copiedEmail ? colors.success : colors.primary}
+                              />
+                              <Text
+                                style={[
+                                  styles.copySmallBtnText,
+                                  copiedEmail && { color: colors.success },
+                                ]}
+                              >
+                                {copiedEmail ? 'Copied' : 'Copy'}
+                              </Text>
+                            </TouchableOpacity>
+                          </View>
+                        ) : null}
+
+                        {/* Personal Email Optional Input */}
+                        <View style={styles.tokenBox}>
+                          <View style={styles.tokenLeft}>
+                            <Text style={styles.tokenLabel}>Personal Email (Optional)</Text>
+                            <TextInput
+                              style={styles.personalEmailInput}
+                              value={personalEmailInput}
+                              onChangeText={setPersonalEmailInput}
+                              placeholder="e.g. personal@gmail.com"
+                              placeholderTextColor={colors.textMuted}
+                              autoCapitalize="none"
+                              autoCorrect={false}
+                              keyboardType="email-address"
+                            />
+                          </View>
+                        </View>
+
+                        {/* Verification Code Box */}
+                        <View style={styles.tokenBox}>
+                          <View style={styles.tokenLeft}>
+                            <Text style={styles.tokenLabel}>Verification Code</Text>
+                            <Text style={styles.tokenCodeText} selectable={true}>
+                              {verificationToken}
+                            </Text>
+                          </View>
+                          <TouchableOpacity
+                            style={styles.copySmallBtn}
+                            onPress={() => copyToClipboard(verificationToken, false)}
+                            activeOpacity={0.7}
+                          >
+                            <MaterialCommunityIcons
+                              name={copiedCode ? 'check' : 'content-copy'}
+                              size={16}
+                              color={copiedCode ? colors.success : colors.primary}
+                            />
+                            <Text
+                              style={[
+                                styles.copySmallBtnText,
+                                copiedCode && { color: colors.success },
+                              ]}
+                            >
+                              {copiedCode ? 'Copied' : 'Copy'}
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
+
+                        {/* Instructions Steps */}
+                        <View style={styles.instructionStepRow}>
+                          <Text style={styles.instructionNumber}>1.</Text>
+                          <Text style={styles.instructionText}>
+                            Add code <Text style={styles.boldWhite}>{verificationToken}</Text> (or your email) to your <Text style={styles.boldWhite}>{selectedPlatform.name}</Text> bio / about (or location).
+                          </Text>
+                        </View>
+
+                        <View style={styles.instructionStepRow}>
+                          <Text style={styles.instructionNumber}>2.</Text>
+                          <Text style={styles.instructionText}>
+                            Tap <Text style={styles.boldWhite}>Verify & Link Account</Text> below to check ownership.
+                          </Text>
+                        </View>
+
+                        {/* Verification Success Message */}
+                        {verificationSuccess && (
+                          <View style={styles.successBox}>
+                            <MaterialCommunityIcons
+                              name="check-circle"
+                              size={20}
+                              color={colors.success}
+                              style={{ marginRight: 8 }}
+                            />
+                            <Text style={styles.successText}>
+                              {verificationSuccess.message || 'Ownership confirmed! Linking profile...'}
+                            </Text>
+                          </View>
+                        )}
+
+                        {/* Verification Failure Message */}
+                        {verificationError ? (
+                          <View style={styles.failBox}>
+                            <MaterialCommunityIcons
+                              name="alert-circle-outline"
+                              size={20}
+                              color={colors.danger}
+                              style={{ marginRight: 8 }}
+                            />
+                            <Text style={styles.failText}>{verificationError}</Text>
+                          </View>
+                        ) : null}
                       </View>
 
-                      {/* Submit Button */}
+                      {/* Main Verify & Link Button */}
                       <TouchableOpacity
                         style={[
-                          styles.submitButton,
-                          !usernameInput.trim() && styles.submitButtonDisabled,
+                          styles.verifySubmitButton,
+                          (!usernameInput.trim() || verifying) &&
+                            styles.submitButtonDisabled,
                         ]}
                         activeOpacity={0.8}
-                        onPress={handleSubmit}
-                        disabled={!usernameInput.trim()}
+                        onPress={handleVerifyAndLink}
+                        disabled={!usernameInput.trim() || verifying}
                       >
-                        <MaterialCommunityIcons
-                          name="link-variant-plus"
-                          size={18}
-                          color={colors.white}
-                          style={{ marginRight: 8 }}
-                        />
-                        <Text style={styles.submitButtonText}>Link Account</Text>
+                        {verifying ? (
+                          <>
+                            <ActivityIndicator
+                              size="small"
+                              color={colors.white}
+                              style={{ marginRight: 8 }}
+                            />
+                            <Text style={styles.submitButtonText}>
+                              Verifying with {selectedPlatform.name}...
+                            </Text>
+                          </>
+                        ) : (
+                          <>
+                            <MaterialCommunityIcons
+                              name="shield-check-outline"
+                              size={20}
+                              color={colors.white}
+                              style={{ marginRight: 8 }}
+                            />
+                            <Text style={styles.submitButtonText}>
+                              Verify & Link Account
+                            </Text>
+                          </>
+                        )}
+                      </TouchableOpacity>
+
+                      {/* Secondary Link Unverified Option */}
+                      <TouchableOpacity
+                        style={styles.unverifiedLinkButton}
+                        activeOpacity={0.7}
+                        onPress={handleLinkUnverified}
+                        disabled={!usernameInput.trim() || verifying}
+                      >
+                        <Text style={styles.unverifiedLinkText}>
+                          Skip verification for now (Mark as Unverified)
+                        </Text>
                       </TouchableOpacity>
                     </View>
                   ) : (
@@ -339,8 +599,7 @@ const AddPlatformModal = ({
                             All Platforms Linked!
                           </Text>
                           <Text style={styles.emptySubtitle}>
-                            You have connected all available coding and gaming
-                            platforms.
+                            You have connected all available coding and gaming platforms.
                           </Text>
                         </View>
                       ) : (
@@ -405,7 +664,7 @@ const styles = StyleSheet.create({
   },
   sheetContainer: {
     width: '100%',
-    maxHeight: '85%',
+    maxHeight: '92%',
   },
   sheet: {
     backgroundColor: colors.surface,
@@ -455,7 +714,7 @@ const styles = StyleSheet.create({
   scrollBody: {
     paddingHorizontal: 20,
     paddingTop: 16,
-    paddingBottom: 10,
+    paddingBottom: 20,
   },
   listContainer: {
     paddingBottom: 10,
@@ -521,7 +780,7 @@ const styles = StyleSheet.create({
     borderLeftWidth: 4,
     borderWidth: 1,
     borderColor: colors.border,
-    marginBottom: 18,
+    marginBottom: 16,
   },
   bannerIconWrapper: {
     width: 44,
@@ -583,19 +842,143 @@ const styles = StyleSheet.create({
     marginLeft: 4,
     fontWeight: '600',
   },
-  hintContainer: {
+  verificationCard: {
+    backgroundColor: colors.surfaceLight,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 14,
+    marginTop: 16,
+    marginBottom: 18,
+  },
+  verificationHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 10,
-    marginBottom: 22,
-    paddingHorizontal: 4,
+    marginBottom: 6,
   },
-  hintText: {
+  verificationTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  verificationExplainer: {
     fontSize: 12,
-    color: colors.textMuted,
-    flex: 1,
+    color: colors.textSecondary,
+    lineHeight: 17,
+    marginBottom: 12,
   },
-  submitButton: {
+  tokenBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.surface,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginBottom: 8,
+  },
+  tokenLeft: {
+    flex: 1,
+    marginRight: 8,
+  },
+  tokenLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 2,
+  },
+  tokenValue: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.text,
+  },
+  personalEmailInput: {
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: '600',
+    paddingVertical: 2,
+  },
+  tokenCodeText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: colors.secondary,
+    letterSpacing: 1,
+  },
+  copySmallBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: `${colors.primary}18`,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    gap: 4,
+  },
+  copySmallBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  instructionStepRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginTop: 8,
+    paddingHorizontal: 2,
+  },
+  instructionNumber: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: colors.secondary,
+    marginRight: 6,
+    marginTop: 1,
+  },
+  instructionText: {
+    flex: 1,
+    fontSize: 12,
+    color: colors.textSecondary,
+    lineHeight: 18,
+  },
+  boldWhite: {
+    fontWeight: '700',
+    color: colors.text,
+  },
+  successBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: `${colors.success}20`,
+    borderWidth: 1,
+    borderColor: colors.success,
+    borderRadius: 10,
+    padding: 10,
+    marginTop: 12,
+  },
+  successText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.success,
+  },
+  failBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: `${colors.danger}18`,
+    borderWidth: 1,
+    borderColor: colors.danger,
+    borderRadius: 10,
+    padding: 10,
+    marginTop: 12,
+  },
+  failText: {
+    flex: 1,
+    fontSize: 12,
+    color: colors.danger,
+    lineHeight: 16,
+    fontWeight: '500',
+  },
+  verifySubmitButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -618,6 +1001,17 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     letterSpacing: 0.4,
+  },
+  unverifiedLinkButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    marginTop: 6,
+  },
+  unverifiedLinkText: {
+    fontSize: 12,
+    color: colors.textMuted,
+    textDecorationLine: 'underline',
   },
 });
 

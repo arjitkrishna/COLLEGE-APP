@@ -48,18 +48,26 @@ const EditProfileScreen = ({ navigation }) => {
   const userAvatar = authUser?.picture || appUser?.avatar;
   const branch = profile?.branch || authUser?.branch || currentBranch || 'CSE';
 
-  const handleAddPlatform = (platformId, username) => {
+  const handleAddPlatform = (platformId, username, verificationMeta) => {
     setLinkedProfiles((prev) => ({
       ...prev,
-      [platformId]: username,
+      [platformId]: {
+        username,
+        verified: Boolean(verificationMeta?.verified),
+        verifiedEmail: verificationMeta?.verifiedEmail || userEmail,
+        verifiedAt: verificationMeta?.verifiedAt || (verificationMeta?.verified ? new Date().toISOString() : null),
+        method: verificationMeta?.method || 'manual',
+      },
     }));
   };
 
   const handleRemovePlatform = (platformId) => {
     const meta = getPlatformById(platformId);
+    const raw = linkedProfiles[platformId];
+    const username = typeof raw === 'object' ? raw?.username : raw;
     Alert.alert(
       'Remove Platform',
-      `Unlink ${meta?.name || platformId} account (@${linkedProfiles[platformId]})?`,
+      `Unlink ${meta?.name || platformId} account (@${username})?`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -236,7 +244,9 @@ const EditProfileScreen = ({ navigation }) => {
                     color: colors.primary,
                     icon: 'code-tags',
                   };
-                  const username = linkedProfiles[platId];
+                  const rawEntry = linkedProfiles[platId];
+                  const username = typeof rawEntry === 'object' ? rawEntry?.username : rawEntry;
+                  const isVerified = typeof rawEntry === 'object' ? Boolean(rawEntry?.verified) : false;
 
                   return (
                     <View key={platId} style={styles.platformRowItem}>
@@ -254,7 +264,20 @@ const EditProfileScreen = ({ navigation }) => {
                       </View>
 
                       <View style={styles.platformDetails}>
-                        <Text style={styles.platformName}>{platMeta.name}</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                          <Text style={styles.platformName}>{platMeta.name}</Text>
+                          {isVerified ? (
+                            <View style={styles.verifiedTag}>
+                              <MaterialCommunityIcons name="shield-check" size={12} color={colors.success} />
+                              <Text style={styles.verifiedTagText}>Verified</Text>
+                            </View>
+                          ) : (
+                            <View style={styles.unverifiedTag}>
+                              <MaterialCommunityIcons name="alert-circle-outline" size={11} color={colors.warning} />
+                              <Text style={styles.unverifiedTagText}>Unverified</Text>
+                            </View>
+                          )}
+                        </View>
                         <Text style={styles.platformHandle} numberOfLines={1}>
                           @{username}
                         </Text>
@@ -317,6 +340,7 @@ const EditProfileScreen = ({ navigation }) => {
         visible={showAddModal}
         onClose={() => setShowAddModal(false)}
         existingPlatforms={linkedKeys}
+        userEmail={userEmail}
         onAdd={handleAddPlatform}
       />
     </SafeAreaView>
@@ -549,6 +573,34 @@ const styles = StyleSheet.create({
     color: colors.white,
     fontSize: 16,
     fontWeight: '700',
+  },
+  verifiedTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: `${colors.success}18`,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 6,
+    gap: 3,
+  },
+  verifiedTagText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.success,
+  },
+  unverifiedTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: `${colors.warning}18`,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 6,
+    gap: 3,
+  },
+  unverifiedTagText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.warning,
   },
 });
 

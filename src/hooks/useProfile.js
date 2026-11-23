@@ -179,9 +179,37 @@ export default function useProfile(targetUserId = null) {
     }
   };
 
-  const addPlatform = async (platformId, username) => {
+  const addPlatform = async (platformId, usernameOrObj, verificationMeta = {}) => {
     const current = profile?.linked_profiles || {};
-    const updated = { ...current, [platformId]: username };
+    let entry;
+    if (typeof usernameOrObj === 'object' && usernameOrObj !== null) {
+      entry = usernameOrObj;
+    } else {
+      entry = {
+        username: usernameOrObj,
+        verified: Boolean(verificationMeta.verified),
+        verifiedEmail: verificationMeta.verifiedEmail || user?.email || '',
+        verifiedAt: verificationMeta.verifiedAt || (verificationMeta.verified ? new Date().toISOString() : null),
+        method: verificationMeta.method || 'manual',
+      };
+    }
+    const updated = { ...current, [platformId]: entry };
+    await updateLinkedProfiles(updated);
+  };
+
+  const verifyPlatform = async (platformId, verificationResult = {}) => {
+    const current = profile?.linked_profiles || {};
+    const existing = current[platformId];
+    if (!existing) return;
+    const username = typeof existing === 'object' ? existing.username : existing;
+    const updatedEntry = {
+      username,
+      verified: true,
+      verifiedEmail: verificationResult.verifiedEmail || user?.email || '',
+      verifiedAt: new Date().toISOString(),
+      method: verificationResult.method || 'bio_verification',
+    };
+    const updated = { ...current, [platformId]: updatedEntry };
     await updateLinkedProfiles(updated);
   };
 
@@ -201,6 +229,7 @@ export default function useProfile(targetUserId = null) {
     updateBio,
     updateLinkedProfiles,
     addPlatform,
+    verifyPlatform,
     removePlatform,
   };
 }

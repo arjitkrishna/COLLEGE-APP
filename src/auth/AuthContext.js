@@ -105,6 +105,17 @@ export function AuthProvider({ children }) {
     return promptAsync();
   };
 
+  const signInAsDemo = (branch = 'CSE') => {
+    setError(null);
+    setUser({
+      id: 'demo-iiitnr-student',
+      email: `student.${branch.toLowerCase()}@iiitnr.edu.in`,
+      name: 'IIIT NR Student',
+      picture: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=300&q=80',
+      branch,
+    });
+  };
+
   const signOut = async () => {
     await supabase.auth.signOut();
     await SecureStore.deleteItemAsync("user");
@@ -113,7 +124,7 @@ export function AuthProvider({ children }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, loading, error, signIn, signOut, ready: !!request }}
+      value={{ user, loading, error, signIn, signInAsDemo, signOut, ready: !!request }}
     >
       {children}
     </AuthContext.Provider>

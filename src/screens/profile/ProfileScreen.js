@@ -55,6 +55,7 @@ const ProfileScreen = ({ navigation }) => {
     updateBranch,
     updateBio,
     addPlatform,
+    verifyPlatform,
     removePlatform,
   } = useProfile();
 
@@ -146,7 +147,8 @@ const ProfileScreen = ({ navigation }) => {
 
     if (serialized !== prevLinkedRef.current) {
       prevLinkedRef.current = serialized;
-      Object.entries(linked).forEach(([platformId, username]) => {
+      Object.entries(linked).forEach(([platformId, val]) => {
+        const username = typeof val === 'object' ? val?.username : val;
         if (username) {
           fetchStatsForPlatform(platformId, username);
         }
@@ -162,7 +164,8 @@ const ProfileScreen = ({ navigation }) => {
       await loadChannelsCount();
 
       const linked = profile?.linked_profiles || {};
-      const fetchPromises = Object.entries(linked).map(([platId, uname]) => {
+      const fetchPromises = Object.entries(linked).map(([platId, val]) => {
+        const uname = typeof val === 'object' ? val?.username : val;
         if (uname) return fetchStatsForPlatform(platId, uname);
         return Promise.resolve();
       });
@@ -175,13 +178,18 @@ const ProfileScreen = ({ navigation }) => {
   };
 
   // Add a platform
-  const handleAddPlatform = async (platformId, username) => {
+  const handleAddPlatform = async (platformId, username, verificationMeta) => {
     try {
-      await addPlatform(platformId, username);
+      await addPlatform(platformId, username, verificationMeta);
       fetchStatsForPlatform(platformId, username);
     } catch (err) {
       Alert.alert('Error', err.message || 'Could not link platform');
     }
+  };
+
+  // Verify an existing unverified platform
+  const handleVerifyExisting = (platformId, username) => {
+    setShowAddModal(true);
   };
 
   // Remove a platform
@@ -416,7 +424,11 @@ const ProfileScreen = ({ navigation }) => {
                   color: colors.primary,
                   icon: 'code-tags',
                 };
-                const username = linkedProfiles[platId];
+                const rawEntry = linkedProfiles[platId];
+                const username = typeof rawEntry === 'object' ? rawEntry?.username : rawEntry;
+                const isVerified = typeof rawEntry === 'object' ? Boolean(rawEntry?.verified) : false;
+                const verifiedEmail = typeof rawEntry === 'object' ? rawEntry?.verifiedEmail : null;
+                const verifiedAt = typeof rawEntry === 'object' ? rawEntry?.verifiedAt : null;
                 const statsState = platformStats[platId];
 
                 return (
@@ -424,6 +436,9 @@ const ProfileScreen = ({ navigation }) => {
                     key={platId}
                     platform={platformMeta}
                     username={username}
+                    isVerified={isVerified}
+                    verifiedEmail={verifiedEmail}
+                    verifiedAt={verifiedAt}
                     stats={
                       statsState?.error
                         ? { error: statsState.error }
@@ -435,6 +450,7 @@ const ProfileScreen = ({ navigation }) => {
                       setExpandedPlatform((prev) => (prev === platId ? null : platId))
                     }
                     onRefresh={() => fetchStatsForPlatform(platId, username)}
+                    onVerify={isOwnProfile && !isVerified ? () => handleVerifyExisting(platId, username) : undefined}
                     onRemove={isOwnProfile ? () => handleRemovePlatform(platId) : undefined}
                   />
                 );
@@ -723,6 +739,7 @@ const ProfileScreen = ({ navigation }) => {
         visible={showAddModal}
         onClose={() => setShowAddModal(false)}
         existingPlatforms={linkedKeys}
+        userEmail={userEmail}
         onAdd={handleAddPlatform}
       />
     </SafeAreaView>

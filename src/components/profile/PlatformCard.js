@@ -73,6 +73,10 @@ const PlatformCard = ({
   username = '',
   stats = null,
   loading = false,
+  isVerified = false,
+  verifiedEmail = null,
+  verifiedAt = null,
+  onVerify,
   onRefresh,
   onRemove,
   expanded,
@@ -603,9 +607,22 @@ const PlatformCard = ({
           <Text style={styles.platformName} numberOfLines={1}>
             {platform.name || 'Platform'}
           </Text>
-          <Text style={styles.usernameText} numberOfLines={1}>
-            @{username}
-          </Text>
+          <View style={styles.usernameRow}>
+            <Text style={styles.usernameText} numberOfLines={1}>
+              @{username}
+            </Text>
+            {isVerified ? (
+              <View style={styles.verifiedMiniTag}>
+                <MaterialCommunityIcons name="shield-check" size={12} color={colors.success} />
+                <Text style={styles.verifiedMiniText}>Verified</Text>
+              </View>
+            ) : (
+              <View style={styles.unverifiedMiniTag}>
+                <MaterialCommunityIcons name="alert-circle-outline" size={11} color={colors.warning} />
+                <Text style={styles.unverifiedMiniText}>Unverified</Text>
+              </View>
+            )}
+          </View>
         </View>
 
         {/* Right Metric */}
@@ -630,6 +647,37 @@ const PlatformCard = ({
       {isExpanded && (
         <View style={styles.expandedWrapper}>
           <View style={styles.divider} />
+
+          {/* Verification Status Banner */}
+          {isVerified ? (
+            <View style={styles.verifiedBannerCard}>
+              <MaterialCommunityIcons name="check-decagram" size={16} color={colors.success} />
+              <Text style={styles.verifiedBannerText} numberOfLines={1}>
+                Verified account • Linked to {verifiedEmail || 'college account'}
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.unverifiedBannerCard}>
+              <View style={styles.unverifiedBannerInfo}>
+                <MaterialCommunityIcons name="shield-alert-outline" size={18} color={colors.warning} />
+                <View style={{ flex: 1, marginLeft: 8 }}>
+                  <Text style={styles.unverifiedBannerTitle}>Unverified Handle</Text>
+                  <Text style={styles.unverifiedBannerSub}>
+                    Prove ownership to get the verified student badge.
+                  </Text>
+                </View>
+              </View>
+              {onVerify && (
+                <TouchableOpacity
+                  style={styles.verifyActionBtn}
+                  activeOpacity={0.7}
+                  onPress={onVerify}
+                >
+                  <Text style={styles.verifyActionBtnText}>Verify</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
 
           {renderPlatformContent()}
 
@@ -1078,6 +1126,97 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.textSecondary,
     marginLeft: 5,
+  },
+  usernameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  verifiedMiniTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: `${colors.success}18`,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    gap: 3,
+  },
+  verifiedMiniText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.success,
+  },
+  unverifiedMiniTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: `${colors.warning}18`,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    gap: 3,
+  },
+  unverifiedMiniText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.warning,
+  },
+  verifiedBannerCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: `${colors.success}15`,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: `${colors.success}40`,
+    gap: 8,
+  },
+  verifiedBannerText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.success,
+  },
+  unverifiedBannerCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: `${colors.warning}12`,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: `${colors.warning}35`,
+  },
+  unverifiedBannerInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    marginRight: 10,
+  },
+  unverifiedBannerTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.warning,
+    marginBottom: 1,
+  },
+  unverifiedBannerSub: {
+    fontSize: 11,
+    color: colors.textMuted,
+    lineHeight: 15,
+  },
+  verifyActionBtn: {
+    backgroundColor: colors.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  verifyActionBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.white,
   },
 });
 
