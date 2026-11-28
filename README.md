@@ -202,6 +202,24 @@ npx expo start -c
 
 ---
 
+## 🌿 Team Collaboration & Branches
+
+To allow teammates to develop features independently without merge conflicts, the repository is organized into dedicated feature branches:
+
+| Branch Name | Feature Scope | Key Files |
+|---|---|---|
+| **`develop`** | Integration branch | Central branch for merging feature PRs |
+| **`feature/profile-verification`** | Student profile & coding stats | `src/screens/profile/*`, `src/lib/platforms.js` |
+| **`feature/channels-messaging`** | Discord channels & real-time DMs | `src/screens/channels/*`, `src/lib/chat.js` |
+| **`feature/attendance-calculator`** | Attendance tracker & safe bunk tools | `src/screens/attendance/*`, `src/components/AttendanceCard.js` |
+| **`feature/timetable-schedule`** | Academic schedule & class venues | `src/screens/timetable/*`, `src/data/timetableData.js` |
+| **`feature/auth-onboarding`** | Google OAuth & branch selection | `src/auth/*`, `src/screens/LoginScreen.js` |
+| **`feature/ui-dashboard`** | Home dashboard & theme styling | `src/screens/home/*`, `src/navigation/*` |
+
+📖 For step-by-step instructions on switching branches, opening PRs, and team workflows, see [CONTRIBUTING.md](file:///c:/Users/Arjit/OneDrive/Desktop/my%20app/iiit-nr-workspace/CONTRIBUTING.md).
+
+---
+
 ## 📄 License
 
 This project is created for the students and community of **Dr. SPM IIIT Naya Raipur**. All academic data and trademarks belong to their respective owners.
